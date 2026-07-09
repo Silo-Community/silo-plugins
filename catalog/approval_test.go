@@ -67,3 +67,24 @@ func TestPruneUnapproved(t *testing.T) {
 		t.Fatal("approved package is missing approval metadata")
 	}
 }
+
+func TestValidateApprovedIndexRejectsMissingApprovalMetadata(t *testing.T) {
+	registry, err := DecodeApprovalRegistry([]byte(`{
+  "plugins": [{
+    "plugin_id": "silo.requests.arr",
+    "repository": "Silo-Community/silo-plugins-requests-arr",
+    "approved_at": "2026-07-09",
+    "review_url": "https://github.com/Silo-Community/silo-plugins/issues/1"
+  }]
+}`))
+	if err != nil {
+		t.Fatalf("DecodeApprovalRegistry() error = %v", err)
+	}
+	index := RepositoryIndex{Plugins: []CatalogPackage{{
+		Manifest: &SourceManifest{PluginId: "silo.requests.arr"},
+		RepoURL:  "https://github.com/Silo-Community/silo-plugins-requests-arr",
+	}}}
+	if err := ValidateApprovedIndex(index, registry); err == nil {
+		t.Fatal("ValidateApprovedIndex() unexpectedly succeeded")
+	}
+}

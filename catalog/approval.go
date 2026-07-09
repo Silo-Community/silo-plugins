@@ -71,6 +71,32 @@ func (r ApprovalRegistry) Resolve(repository, pluginID string) (Approval, error)
 	return Approval{}, fmt.Errorf("plugin %s from %s is not approved", pluginID, repository)
 }
 
+func ValidateApprovedIndex(index RepositoryIndex, registry ApprovalRegistry) error {
+	seenPluginIDs := make(map[string]struct{}, len(index.Plugins))
+	for _, pkg := range index.Plugins {
+		if pkg.Manifest == nil {
+			return fmt.Errorf("catalog package manifest is required")
+		}
+		pluginID := pkg.Manifest.GetPluginId()
+		if _, exists := seenPluginIDs[pluginID]; exists {
+			return fmt.Errorf("catalog plugin_id %q is duplicated", pluginID)
+		}
+		seenPluginIDs[pluginID] = struct{}{}
+		repository := strings.TrimPrefix(pkg.RepoURL, "https://github.com/")
+		approval, err := registry.Resolve(repository, pluginID)
+		if err != nil {
+			return err
+		}
+		if pkg.Approval == nil {
+			return fmt.Errorf("catalog plugin %s is missing approval metadata", pluginID)
+		}
+		if *pkg.Approval != approval {
+			return fmt.Errorf("catalog plugin %s approval metadata does not match the registry", pluginID)
+		}
+	}
+	return nil
+}
+
 func validateGitHubURL(raw string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil {

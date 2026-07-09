@@ -1,3 +1,16 @@
 {
-  "plugins": []
+  "plugins": [
+    {
+      "plugin_id": "silo.requests.arr",
+      "repository": "Silo-Community/silo-plugins-requests-arr",
+      "approved_at": "2026-07-09",
+      "review_url": "https://github.com/Silo-Community/silo-plugins/issues/2"
+    },
+    {
+      "plugin_id": "silo.requests.seerr",
+      "repository": "Silo-Community/silo-plugins-requests-seerr",
+      "approved_at": "2026-07-09",
+      "review_url": "https://github.com/Silo-Community/silo-plugins/issues/1"
+    }
+  ]
 }
