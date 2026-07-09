@@ -1,0 +1,187 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/Silo-Community/silo-plugins/catalog"
+)
+
+const githubAPIVersion = "2022-11-28"
+
+func main() {
+	var repo string
+	var tag string
+	var manifestPath string
+	var approvalsPath string
+
+	flag.StringVar(&repo, "repo", "", "GitHub repository in owner/name form")
+	flag.StringVar(&tag, "tag", "", "Git tag to publish from")
+	flag.StringVar(&manifestPath, "manifest", "manifest.json", "Path to the catalog manifest")
+	flag.StringVar(&approvalsPath, "approvals", "approved-plugins.json", "Path to the approved plugin registry")
+	flag.Parse()
+
+	if strings.TrimSpace(repo) == "" {
+		exitf("repo is required")
+	}
+	if strings.TrimSpace(tag) == "" {
+		exitf("tag is required")
+	}
+
+	token := os.Getenv("GITHUB_TOKEN")
+	client := &http.Client{Timeout: 30 * time.Second}
+	ctx := context.Background()
+
+	release, err := fetchRelease(ctx, client, token, repo, tag)
+	if err != nil {
+		exitf("fetch release: %v", err)
+	}
+
+	sourceManifest, err := fetchSourceManifest(ctx, client, token, repo, tag)
+	if err != nil {
+		exitf("fetch source manifest: %v", err)
+	}
+
+	registry, err := loadApprovals(approvalsPath)
+	if err != nil {
+		exitf("load approvals: %v", err)
+	}
+	approval, err := registry.Resolve(repo, sourceManifest.GetPluginId())
+	if err != nil {
+		exitf("approve plugin: %v", err)
+	}
+
+	pkg, err := catalog.BuildPackageFromRelease(repo, sourceManifest, release)
+	if err != nil {
+		exitf("build catalog package: %v", err)
+	}
+	pkg.Approval = &approval
+
+	index, err := loadIndex(manifestPath)
+	if err != nil {
+		exitf("load catalog: %v", err)
+	}
+	index = catalog.UpsertPackage(index, pkg)
+	index = catalog.PruneUnapproved(index, registry)
+	if err := writeIndex(manifestPath, index); err != nil {
+		exitf("write catalog: %v", err)
+	}
+}
+
+func loadApprovals(path string) (catalog.ApprovalRegistry, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return catalog.ApprovalRegistry{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	registry, err := catalog.DecodeApprovalRegistry(data)
+	if err != nil {
+		return catalog.ApprovalRegistry{}, fmt.Errorf("decode %s: %w", path, err)
+	}
+	return registry, nil
+}
+
+func fetchRelease(ctx context.Context, client *http.Client, token, repo, tag string) (catalog.Release, error) {
+	var release catalog.Release
+	if err := githubJSON(ctx, client, token, "https://api.github.com/repos/"+repo+"/releases/tags/"+tag, &release); err != nil {
+		return catalog.Release{}, err
+	}
+	return release, nil
+}
+
+func fetchSourceManifest(ctx context.Context, client *http.Client, token, repo, tag string) (*catalog.SourceManifest, error) {
+	url := "https://raw.githubusercontent.com/" + repo + "/" + tag + "/manifest.json"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("User-Agent", "silo-plugins-catalog-updater")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GET %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return nil, fmt.Errorf("GET %s: status %d: %s", url, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read source manifest: %w", err)
+	}
+	manifest, err := catalog.DecodeSourceManifest(body)
+	if err != nil {
+		return nil, err
+	}
+	return manifest, nil
+}
+
+func githubJSON(ctx context.Context, client *http.Client, token, url string, dest any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "silo-plugins-catalog-updater")
+	req.Header.Set("X-GitHub-Api-Version", githubAPIVersion)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("GET %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return fmt.Errorf("GET %s: status %d: %s", url, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	if err := json.NewDecoder(resp.Body).Decode(dest); err != nil {
+		return fmt.Errorf("decode %s: %w", url, err)
+	}
+	return nil
+}
+
+func loadIndex(path string) (catalog.RepositoryIndex, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return catalog.RepositoryIndex{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	var index catalog.RepositoryIndex
+	if len(bytes.TrimSpace(data)) == 0 {
+		return index, nil
+	}
+	if err := json.Unmarshal(data, &index); err != nil {
+		return catalog.RepositoryIndex{}, fmt.Errorf("decode %s: %w", path, err)
+	}
+	return index, nil
+}
+
+func writeIndex(path string, index catalog.RepositoryIndex) error {
+	data, err := json.MarshalIndent(index, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal catalog: %w", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
+}
+
+func exitf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, format+"\n", args...)
+	os.Exit(1)
+}
