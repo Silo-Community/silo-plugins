@@ -42,6 +42,13 @@ jobs:
           test -n "$PLUGIN_TAG"
           go run ./cmd/update-catalog -repo "$PLUGIN_REPO" -tag "$PLUGIN_TAG"
 
+      - name: Validate approved catalog
+        env:
+          GOWORK: off
+        run: |
+          go test ./...
+          go run ./cmd/check-catalog
+
       - name: Commit catalog changes
         env:
           PLUGIN_REPO: ${{ inputs.repo || github.event.client_payload.repo }}
