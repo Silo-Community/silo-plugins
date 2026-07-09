@@ -26,6 +26,13 @@ release workflow dispatches `plugin_release_published` to this repository. The
 catalog updater verifies the repository and plugin ID against the approval
 registry before updating `manifest.json`.
 
+Validate the registry and generated catalog locally with:
+
+```sh
+GOWORK=off go test ./...
+GOWORK=off go run ./cmd/check-catalog
+```
+
 ## License
 
 The catalog tooling is licensed under `Apache-2.0`. See [LICENSE](LICENSE).
