@@ -11,6 +11,12 @@
       "repository": "Silo-Community/silo-plugins-requests-seerr",
       "approved_at": "2026-07-09",
       "review_url": "https://github.com/Silo-Community/silo-plugins/issues/1"
+    },
+    {
+      "plugin_id": "ironicbadger.network-access.tailscale",
+      "repository": "Silo-Community/silo-plugin-tailscale",
+      "approved_at": "2026-09-22",
+      "review_url": "https://github.com/Silo-Community/silo-plugins/issues/8"
     }
   ]
 }
