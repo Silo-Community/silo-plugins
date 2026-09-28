@@ -394,7 +394,10 @@
                   ]
                 }
               }
-            ]
+            ],
+            "request_router": {
+              "supports_seasons": true
+            }
           }
         ],
         "presentation": {
