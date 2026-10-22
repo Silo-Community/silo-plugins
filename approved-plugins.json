@@ -17,6 +17,12 @@
       "repository": "Silo-Community/silo-plugin-tailscale",
       "approved_at": "2026-09-22",
       "review_url": "https://github.com/Silo-Community/silo-plugins/issues/8"
+    },
+    {
+      "plugin_id": "silo.watchprovider.scrob",
+      "repository": "Silo-Community/silo-plugin-watchprovider-scrob",
+      "approved_at": "2026-10-22",
+      "review_url": "https://github.com/Silo-Community/silo-plugins/issues/11"
     }
   ]
 }
