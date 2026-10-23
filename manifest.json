@@ -602,7 +602,9 @@
                 }
               }
             ],
-            "request_router": {}
+            "request_router": {
+              "reports_download_progress": true
+            }
           }
         ],
         "presentation": {
