@@ -474,7 +474,8 @@
               }
             ],
             "request_router": {
-              "supports_seasons": true
+              "supports_seasons": true,
+              "reports_download_progress": true
             }
           }
         ],
