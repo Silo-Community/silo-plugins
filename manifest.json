@@ -3,7 +3,7 @@
     {
       "manifest": {
         "plugin_id": "ironicbadger.network-access.tailscale",
-        "version": "0.2.1",
+        "version": "0.2.2",
         "silo_api_version": "v1",
         "supported_platforms": [
           {
@@ -146,16 +146,16 @@
         }
       },
       "repo_url": "https://github.com/Silo-Community/silo-plugin-tailscale",
-      "checksums_url": "https://github.com/Silo-Community/silo-plugin-tailscale/releases/download/v0.2.1/checksums.txt",
+      "checksums_url": "https://github.com/Silo-Community/silo-plugin-tailscale/releases/download/v0.2.2/checksums.txt",
       "binaries": {
         "darwin/arm64": {
-          "url": "https://github.com/Silo-Community/silo-plugin-tailscale/releases/download/v0.2.1/plugin-darwin-arm64"
+          "url": "https://github.com/Silo-Community/silo-plugin-tailscale/releases/download/v0.2.2/plugin-darwin-arm64"
         },
         "linux/amd64": {
-          "url": "https://github.com/Silo-Community/silo-plugin-tailscale/releases/download/v0.2.1/plugin-linux-amd64"
+          "url": "https://github.com/Silo-Community/silo-plugin-tailscale/releases/download/v0.2.2/plugin-linux-amd64"
         },
         "linux/arm64": {
-          "url": "https://github.com/Silo-Community/silo-plugin-tailscale/releases/download/v0.2.1/plugin-linux-arm64"
+          "url": "https://github.com/Silo-Community/silo-plugin-tailscale/releases/download/v0.2.2/plugin-linux-arm64"
         }
       },
       "approval": {
