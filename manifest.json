@@ -739,7 +739,7 @@
     {
       "manifest": {
         "plugin_id": "silo.watchprovider.scrob",
-        "version": "0.2.12",
+        "version": "0.2.13",
         "silo_api_version": "v1",
         "supported_platforms": [
           {
@@ -812,7 +812,7 @@
                 {
                   "key": "remove_watched_movies",
                   "label": "Remove watched movies from the Scrob watchlist",
-                  "description": "Takes a movie off the \"Silo - Watchlist\" list in Scrob once you watch it after adding it, so Silo does not put it back on your watchlist. A movie you add again after watching it stays. Series stay listed, since new episodes can arrive.",
+                  "description": "Takes a movie off the Scrob watchlist once you watch it after adding it, so Silo does not put it back on your watchlist. A movie you add again after watching it stays. Series stay listed, since new episodes can arrive.",
                   "type": 1,
                   "default_value": true
                 }
@@ -824,7 +824,7 @@
         "presentation": {
           "display_name": "Scrob Watch Provider",
           "summary": "Sync Silo watch activity with a self-hosted Scrob instance.",
-          "description_markdown": "Imports movie and episode watch history and resume points, exports completed watches and unwatches, syncs movie and series ratings in both directions, syncs dropped shows, keeps Silo's watchlist in a Scrob list named \"Silo - Watchlist\", and reports live playback to Scrob's Now Playing. Built against stock upstream Silo (plugin SDK v0.24.0).",
+          "description_markdown": "Imports movie and episode watch history and resume points, exports completed watches and unwatches, syncs movie and series ratings in both directions, syncs dropped shows, syncs Silo's watchlist with Scrob's native watchlist (or, on older Scrob, a list named \"Silo - Watchlist\"), and reports live playback to Scrob's Now Playing. Built against stock upstream Silo (plugin SDK v0.24.0).",
           "setup_markdown": "Connect a Silo profile by entering that profile's Scrob server URL and API key (from Scrob's account settings). Different profiles can use different Scrob servers.",
           "homepage_url": "https://github.com/ellite/scrob",
           "source_url": "https://github.com/Silo-Community/silo-plugin-watchprovider-scrob",
@@ -836,16 +836,16 @@
         }
       },
       "repo_url": "https://github.com/Silo-Community/silo-plugin-watchprovider-scrob",
-      "checksums_url": "https://github.com/Silo-Community/silo-plugin-watchprovider-scrob/releases/download/v0.2.12/checksums.txt",
+      "checksums_url": "https://github.com/Silo-Community/silo-plugin-watchprovider-scrob/releases/download/v0.2.13/checksums.txt",
       "binaries": {
         "darwin/arm64": {
-          "url": "https://github.com/Silo-Community/silo-plugin-watchprovider-scrob/releases/download/v0.2.12/plugin-darwin-arm64"
+          "url": "https://github.com/Silo-Community/silo-plugin-watchprovider-scrob/releases/download/v0.2.13/plugin-darwin-arm64"
         },
         "linux/amd64": {
-          "url": "https://github.com/Silo-Community/silo-plugin-watchprovider-scrob/releases/download/v0.2.12/plugin-linux-amd64"
+          "url": "https://github.com/Silo-Community/silo-plugin-watchprovider-scrob/releases/download/v0.2.13/plugin-linux-amd64"
         },
         "linux/arm64": {
-          "url": "https://github.com/Silo-Community/silo-plugin-watchprovider-scrob/releases/download/v0.2.12/plugin-linux-arm64"
+          "url": "https://github.com/Silo-Community/silo-plugin-watchprovider-scrob/releases/download/v0.2.13/plugin-linux-arm64"
         }
       },
       "approval": {
