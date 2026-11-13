@@ -14,54 +14,83 @@ on:
         description: Release tag to publish
         required: true
         type: string
+      allow_rollback:
+        description: Accept a version that is not newer than the listed one (deliberate rollback only)
+        required: false
+        type: boolean
+        default: false
 
-permissions:
-  contents: write
+# CATALOG_PUSH_TOKEN pushes the catalog, and every approved repository is
+# public, so the workflow token needs no permissions.
+permissions: {}
 
-concurrency:
-  group: plugin-catalog-update
-  cancel-in-progress: false
+# No concurrency group. A group keyed on the dispatch payload lets anyone with
+# the dispatch token cancel a plugin's pending run by sending bogus dispatches,
+# since GitHub keeps one pending run per group. Runs instead race on the push:
+# each attempt below rebuilds on the current main, and update-catalog re-checks
+# the version against it, so a duplicate run becomes a no-op and an older
+# release that loses to a newer one is refused.
 
 jobs:
   update:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           token: ${{ secrets.CATALOG_PUSH_TOKEN }}
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: "1.26"
 
-      - name: Update catalog manifest
+      - name: Test catalog tooling
         env:
+          GOWORK: "off"
+        run: go test ./...
+
+      - name: Update, validate, and push the catalog
+        env:
+          GOWORK: "off"
           GITHUB_TOKEN: ${{ github.token }}
           PLUGIN_REPO: ${{ inputs.repo || github.event.client_payload.repo }}
           PLUGIN_TAG: ${{ inputs.tag || github.event.client_payload.tag }}
+          # Only a manual run can roll back; a repository_dispatch payload
+          # cannot set this.
+          ALLOW_ROLLBACK: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_rollback }}
         run: |
           test -n "$PLUGIN_REPO"
           test -n "$PLUGIN_TAG"
-          go run ./cmd/update-catalog -repo "$PLUGIN_REPO" -tag "$PLUGIN_TAG"
-
-      - name: Validate approved catalog
-        env:
-          GOWORK: off
-        run: |
-          go test ./...
-          go run ./cmd/check-catalog
-
-      - name: Commit catalog changes
-        env:
-          PLUGIN_REPO: ${{ inputs.repo || github.event.client_payload.repo }}
-          PLUGIN_TAG: ${{ inputs.tag || github.event.client_payload.tag }}
-        run: |
-          if git diff --quiet -- manifest.json; then
-            exit 0
-          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add manifest.json
-          git commit -m "chore: update catalog for ${PLUGIN_REPO}@${PLUGIN_TAG}"
-          git pull --rebase origin main
-          git push origin HEAD:main
+          args=(-repo "$PLUGIN_REPO" -tag "$PLUGIN_TAG")
+          if [ "$ALLOW_ROLLBACK" = "true" ]; then
+            args+=(-allow-rollback)
+          fi
+          # update-catalog validates the repository and tag, refuses a
+          # repository outside approved-plugins.json, a version not newer than
+          # the listed one, drafts and prereleases, asset URLs outside the
+          # release, and an unsigned release of a plugin whose entry is signed.
+          # It verifies a signed release's binaries with gh attestation verify
+          # and reads manifest.json at the release's commit.
+          # A repository_dispatch run checks out main as it was when the release
+          # fired, and other releases may have updated the catalog since. Each
+          # attempt rebuilds the entry on the current main, so losing a push race
+          # retries instead of conflicting on manifest.json.
+          for attempt in 1 2 3 4 5; do
+            git fetch --quiet origin main
+            git reset --quiet --hard FETCH_HEAD
+            go run ./cmd/update-catalog "${args[@]}"
+            if git diff --quiet -- manifest.json; then
+              echo "The catalog already lists ${PLUGIN_REPO}@${PLUGIN_TAG}."
+              exit 0
+            fi
+            go run ./cmd/check-catalog
+            git add manifest.json
+            git commit --quiet -m "chore: update catalog for ${PLUGIN_REPO}@${PLUGIN_TAG}"
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            sleep $((attempt * 5))
+          done
+          echo "Could not push the catalog update after 5 attempts." >&2
+          exit 1

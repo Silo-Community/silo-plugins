@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -19,18 +20,25 @@ type Asset struct {
 }
 
 type Release struct {
-	TagName string  `json:"tag_name"`
-	Assets  []Asset `json:"assets"`
+	TagName    string  `json:"tag_name"`
+	Draft      bool    `json:"draft"`
+	Prerelease bool    `json:"prerelease"`
+	Assets     []Asset `json:"assets"`
 }
 
 type PlatformBinary struct {
 	URL string `json:"url"`
+	// Checksum is the lowercase hex SHA-256 of the binary the catalog updater
+	// verified, recorded for signed releases only. Silo servers prefer it over
+	// checksums_url, which pins the listed bytes even if release assets change.
+	Checksum string `json:"checksum,omitempty"`
 }
 
 type CatalogPackage struct {
 	Manifest     *pluginv1.PluginManifest  `json:"manifest"`
 	RepoURL      string                    `json:"repo_url,omitempty"`
 	ChecksumsURL string                    `json:"checksums_url,omitempty"`
+	BundleURL    string                    `json:"bundle_url,omitempty"`
 	Binaries     map[string]PlatformBinary `json:"binaries,omitempty"`
 	Approval     *Approval                 `json:"approval,omitempty"`
 }
@@ -70,22 +78,16 @@ func BuildPackageFromRelease(repo string, source *SourceManifest, release Releas
 		return CatalogPackage{}, fmt.Errorf("release tag_name is required")
 	}
 
-	checksumsURL := ""
-	binaries := map[string]PlatformBinary{}
-	for _, asset := range release.Assets {
-		switch {
-		case asset.Name == "checksums.txt":
-			checksumsURL = asset.BrowserDownloadURL
-		case strings.HasPrefix(asset.Name, "plugin-"):
-			platform, ok := platformKeyFromAssetName(asset.Name)
-			if !ok {
-				continue
-			}
-			binaries[platform] = PlatformBinary{URL: asset.BrowserDownloadURL}
-		}
+	assets, err := ParseReleaseAssets(repo, release)
+	if err != nil {
+		return CatalogPackage{}, err
+	}
+	binaries := make(map[string]PlatformBinary, len(assets.Binaries))
+	for platform, url := range assets.Binaries {
+		binaries[platform] = PlatformBinary{URL: url}
 	}
 
-	if checksumsURL == "" {
+	if assets.ChecksumsURL == "" {
 		return CatalogPackage{}, fmt.Errorf("release %q is missing checksums.txt", release.TagName)
 	}
 	if len(binaries) == 0 {
@@ -107,7 +109,8 @@ func BuildPackageFromRelease(repo string, source *SourceManifest, release Releas
 	return CatalogPackage{
 		Manifest:     manifest,
 		RepoURL:      repositoryURL,
-		ChecksumsURL: checksumsURL,
+		ChecksumsURL: assets.ChecksumsURL,
+		BundleURL:    assets.BundleURL,
 		Binaries:     binaries,
 	}, nil
 }
@@ -161,12 +164,16 @@ func packagePluginID(pkg CatalogPackage) string {
 	return pkg.Manifest.GetPluginId()
 }
 
+// platformPartPattern is one of the os or arch parts of a binary asset name,
+// so plugin-linux-amd64 is a binary and plugin-linux-amd64.zip is not.
+var platformPartPattern = regexp.MustCompile(`^[a-z0-9]+$`)
+
 func platformKeyFromAssetName(name string) (string, bool) {
 	parts := strings.Split(name, "-")
-	if len(parts) != 3 {
+	if len(parts) != 3 || parts[0] != "plugin" {
 		return "", false
 	}
-	if parts[0] != "plugin" || parts[1] == "" || parts[2] == "" {
+	if !platformPartPattern.MatchString(parts[1]) || !platformPartPattern.MatchString(parts[2]) {
 		return "", false
 	}
 	return parts[1] + "/" + parts[2], true

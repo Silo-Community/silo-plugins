@@ -4,9 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
+
+// signerWorkflowPattern is a plain workflow file name in .github/workflows:
+// no path separators, no leading dot, and a .yml or .yaml extension.
+var signerWorkflowPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*\.ya?ml$`)
 
 type Approval struct {
 	ApprovedAt string `json:"approved_at"`
@@ -18,6 +23,10 @@ type ApprovedPlugin struct {
 	Repository string `json:"repository"`
 	ApprovedAt string `json:"approved_at"`
 	ReviewURL  string `json:"review_url"`
+	// SignerWorkflow, when set, names the one workflow file in the plugin's
+	// own repository whose signature the catalog accepts instead of Silo's
+	// shared release workflow. Setting it is an approval decision.
+	SignerWorkflow string `json:"signer_workflow,omitempty"`
 }
 
 type ApprovalRegistry struct {
@@ -56,6 +65,9 @@ func DecodeApprovalRegistry(data []byte) (ApprovalRegistry, error) {
 		if err := validateGitHubURL(plugin.ReviewURL); err != nil {
 			return ApprovalRegistry{}, fmt.Errorf("review_url for %s: %w", pluginID, err)
 		}
+		if plugin.SignerWorkflow != "" && !signerWorkflowPattern.MatchString(plugin.SignerWorkflow) {
+			return ApprovalRegistry{}, fmt.Errorf("signer_workflow for %s must be a .yml or .yaml file name with no path, got %q", pluginID, plugin.SignerWorkflow)
+		}
 		seenPluginIDs[pluginID] = struct{}{}
 		seenRepositories[repositoryKey] = struct{}{}
 	}
@@ -69,6 +81,28 @@ func (r ApprovalRegistry) Resolve(repository, pluginID string) (Approval, error)
 		}
 	}
 	return Approval{}, fmt.Errorf("plugin %s from %s is not approved", pluginID, repository)
+}
+
+// ApprovedRepository returns the registry entry for repo, or an error when
+// repo is not approved. update-catalog calls it before any fetch. The
+// comparison is exact, so every request and asset URL built from repo uses the
+// spelling the registry records.
+func (r ApprovalRegistry) ApprovedRepository(repo string) (ApprovedPlugin, error) {
+	for _, approved := range r.Plugins {
+		if approved.Repository == repo {
+			return approved, nil
+		}
+	}
+	return ApprovedPlugin{}, fmt.Errorf("repository %s is not in the approval registry", repo)
+}
+
+// CheckManifestPluginID refuses a release whose manifest.json names a plugin
+// other than the one approved for its repository.
+func (a ApprovedPlugin) CheckManifestPluginID(got string) error {
+	if got != a.PluginID {
+		return fmt.Errorf("manifest.json names plugin %q, but %s is approved for %q", got, a.Repository, a.PluginID)
+	}
+	return nil
 }
 
 func ValidateApprovedIndex(index RepositoryIndex, registry ApprovalRegistry) error {
