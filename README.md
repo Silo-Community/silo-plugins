@@ -55,25 +55,51 @@ next time the catalog is written.
 ### Signed releases
 
 A signed release carries `plugin.sigstore.json`: a Sigstore bundle with one SLSA
-provenance attestation covering every `plugin-<os>-<arch>` binary. The catalog
-entry then gains a package-level `bundle_url` beside `checksums_url`. Before
-writing the entry, `update-catalog` checks each binary with
-`gh attestation verify`. The certificate must name one of two signers:
+provenance attestation covering every `plugin-<os>-<arch>` binary. Before
+writing the entry, `update-catalog` downloads every binary and checks it with
+`gh attestation verify`. The entry then gains a package-level `bundle_url`
+beside `checksums_url`, and each binary gains a `checksum`: the SHA-256 of the
+file the tool verified. Silo servers prefer that checksum over `checksums_url`,
+so the listed bytes stay pinned even if the release assets are replaced later.
+Unsigned entries carry no per-binary checksum.
 
-- Silo's shared release workflow,
+The certificate must name exactly one signer, chosen by the plugin's entry in
+`approved-plugins.json`:
+
+- By default, Silo's shared release workflow,
   `https://github.com/Silo-Server/.github/.github/workflows/plugin-release.yml@refs/heads/main`.
-- A workflow in the plugin's own repository run from the release tag,
-  `https://github.com/<repo>/.github/workflows/<file>@refs/tags/<tag>`, where
-  `<file>` is a `.yml` or `.yaml` file directly in that directory.
+  No other workflow is accepted.
+- If the entry sets `signer_workflow` (for example `"signer_workflow":
+  "release.yml"`), that workflow file in the plugin's own repository, run from
+  the release tag:
+  `https://github.com/<repo>/.github/workflows/<signer_workflow>@refs/tags/<tag>`.
+  The shared workflow is then not accepted for that plugin. The signed commit
+  must also be on the repository's default branch: GitHub's compare API must
+  report it as identical to or behind that branch, not ahead or diverged.
 
-Either way, the tool also requires the issuer
+For both signers, the tool also requires the issuer
 `https://token.actions.githubusercontent.com`, the approved repository as the
 source repository, the source ref `refs/tags/<tag>`, a GitHub-hosted runner,
 SLSA provenance v1, a Sigstore public-good transparency-log entry, and the same
 source commit for every binary. Any failure refuses the release.
 
+What a signature proves:
+
+- Shared workflow: the binaries were built on a GitHub-hosted runner by Silo's
+  release workflow at `main`, from the approved repository at the commit the
+  release tag named. The build steps are Silo's, not the plugin's. It does not
+  prove the plugin's source at that commit was reviewed.
+- Own workflow: the binaries were built on a GitHub-hosted runner by the named
+  workflow file, as it existed at the tagged commit, from a commit already on
+  the default branch. Anyone who can push to the default branch and create
+  tags can change that workflow and what it builds, so this proves origin from
+  the approved repository's default branch, not that the build steps or source
+  were reviewed.
+
 Unsigned releases are still accepted for a plugin until its catalog entry has a
 `bundle_url`; after that, an unsigned release of that plugin is refused.
+`signer_workflow` is an approval decision; see
+[`APPROVAL_POLICY.md`](APPROVAL_POLICY.md). `check-catalog` validates its format.
 
 ### Workflow
 

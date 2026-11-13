@@ -2,7 +2,6 @@ package catalog
 
 import (
 	"encoding/json"
-	"regexp"
 	"slices"
 	"testing"
 
@@ -344,18 +343,23 @@ func TestBuildPackageFromRelease_BundleURL(t *testing.T) {
 	}
 }
 
-func TestApprovedPluginID(t *testing.T) {
+func TestApprovedRepository(t *testing.T) {
 	registry, err := DecodeApprovalRegistry([]byte(`{
   "plugins": [
     {"plugin_id": "silo.requests.arr", "repository": "Silo-Community/silo-plugins-requests-arr", "approved_at": "2026-07-09", "review_url": "https://github.com/Silo-Community/silo-plugins/issues/2"},
-    {"plugin_id": "silo.requests.seerr", "repository": "Silo-Community/silo-plugins-requests-seerr", "approved_at": "2026-07-09", "review_url": "https://github.com/Silo-Community/silo-plugins/issues/1"}
+    {"plugin_id": "silo.requests.seerr", "repository": "Silo-Community/silo-plugins-requests-seerr", "approved_at": "2026-07-09", "review_url": "https://github.com/Silo-Community/silo-plugins/issues/1", "signer_workflow": "release.yml"}
   ]
 }`))
 	if err != nil {
 		t.Fatalf("DecodeApprovalRegistry() error = %v", err)
 	}
-	if got, err := registry.ApprovedPluginID("Silo-Community/silo-plugins-requests-seerr"); err != nil || got != "silo.requests.seerr" {
-		t.Fatalf("ApprovedPluginID(seerr) = %q, %v; want silo.requests.seerr", got, err)
+	arr, err := registry.ApprovedRepository("Silo-Community/silo-plugins-requests-arr")
+	if err != nil || arr.PluginID != "silo.requests.arr" || arr.SignerWorkflow != "" {
+		t.Fatalf("ApprovedRepository(arr) = %+v, %v; want silo.requests.arr with the shared signer", arr, err)
+	}
+	seerr, err := registry.ApprovedRepository("Silo-Community/silo-plugins-requests-seerr")
+	if err != nil || seerr.PluginID != "silo.requests.seerr" || seerr.SignerWorkflow != "release.yml" {
+		t.Fatalf("ApprovedRepository(seerr) = %+v, %v; want silo.requests.seerr signed by release.yml", seerr, err)
 	}
 	for _, repo := range []string{
 		"Silo-Community/silo-plugins-requests-other",
@@ -363,8 +367,50 @@ func TestApprovedPluginID(t *testing.T) {
 		"Silo-Server/silo-plugins-requests-arr",
 		"",
 	} {
-		if got, err := registry.ApprovedPluginID(repo); err == nil {
-			t.Fatalf("ApprovedPluginID(%q) = %q, want an error", repo, got)
+		if got, err := registry.ApprovedRepository(repo); err == nil {
+			t.Fatalf("ApprovedRepository(%q) = %+v, want an error", repo, got)
+		}
+	}
+}
+
+func TestCheckManifestPluginID(t *testing.T) {
+	approved := ApprovedPlugin{PluginID: "silo.requests.arr", Repository: testRepo}
+	if err := approved.CheckManifestPluginID("silo.requests.arr"); err != nil {
+		t.Fatalf("CheckManifestPluginID(approved ID) error = %v", err)
+	}
+	for _, got := range []string{"silo.requests.seerr", "", "Silo.requests.arr"} {
+		if err := approved.CheckManifestPluginID(got); err == nil {
+			t.Fatalf("CheckManifestPluginID(%q) accepted another plugin ID", got)
+		}
+	}
+}
+
+func TestDecodeApprovalRegistrySignerWorkflow(t *testing.T) {
+	entry := func(signerWorkflow string) []byte {
+		return []byte(`{"plugins": [{"plugin_id": "silo.requests.arr", "repository": "Silo-Community/silo-plugins-requests-arr", "approved_at": "2026-07-09", "review_url": "https://github.com/Silo-Community/silo-plugins/issues/2", "signer_workflow": "` + signerWorkflow + `"}]}`)
+	}
+	tests := []struct {
+		signerWorkflow string
+		wantErr        bool
+	}{
+		{"", false},
+		{"release.yml", false},
+		{"plugin-release.yaml", false},
+		{"release_v2.yml", false},
+		{"release.json", true},
+		{"release", true},
+		{"workflows/release.yml", true},
+		{"../release.yml", true},
+		{".github/workflows/release.yml", true},
+		{"release.yml@refs/heads/main", true},
+		{".yml", true},
+		{"release.yml\\n", true},
+		{"release .yml", true},
+	}
+	for _, tt := range tests {
+		_, err := DecodeApprovalRegistry(entry(tt.signerWorkflow))
+		if (err != nil) != tt.wantErr {
+			t.Fatalf("DecodeApprovalRegistry(signer_workflow %q) error = %v, wantErr %v", tt.signerWorkflow, err, tt.wantErr)
 		}
 	}
 }
@@ -397,57 +443,90 @@ func TestCheckSignatureRatchet(t *testing.T) {
 }
 
 func TestVerifyArgs(t *testing.T) {
-	got := VerifyArgs("/tmp/v/binary-0", "/tmp/v/plugin.sigstore.json", testRepo, "v0.1.11")
-	want := []string{
-		"attestation", "verify", "/tmp/v/binary-0",
-		"--bundle=/tmp/v/plugin.sigstore.json",
-		"--repo=Silo-Community/silo-plugins-requests-arr",
-		`--cert-identity-regex=^(?:https://github\.com/Silo-Server/\.github/\.github/workflows/plugin-release\.yml@refs/heads/main|https://github\.com/Silo-Community/silo-plugins-requests-arr/\.github/workflows/[A-Za-z0-9._-]+\.ya?ml@refs/tags/v0\.1\.11)$`,
-		"--cert-oidc-issuer=https://token.actions.githubusercontent.com",
-		"--source-ref=refs/tags/v0.1.11",
-		"--predicate-type=https://slsa.dev/provenance/v1",
-		"--deny-self-hosted-runners",
-		"--format=json",
+	common := func(identity string) []string {
+		return []string{
+			"attestation", "verify", "/tmp/v/binary-0",
+			"--bundle=/tmp/v/plugin.sigstore.json",
+			"--repo=Silo-Community/silo-plugins-requests-arr",
+			"--cert-identity=" + identity,
+			"--cert-oidc-issuer=https://token.actions.githubusercontent.com",
+			"--source-ref=refs/tags/v0.1.11",
+			"--predicate-type=https://slsa.dev/provenance/v1",
+			"--deny-self-hosted-runners",
+			"--format=json",
+		}
 	}
-	if !slices.Equal(got, want) {
-		t.Fatalf("VerifyArgs() =\n%q\nwant\n%q", got, want)
+	shared := VerifyArgs("/tmp/v/binary-0", "/tmp/v/plugin.sigstore.json", testRepo, "v0.1.11", "")
+	if want := common("https://github.com/Silo-Server/.github/.github/workflows/plugin-release.yml@refs/heads/main"); !slices.Equal(shared, want) {
+		t.Fatalf("VerifyArgs(shared) =\n%q\nwant\n%q", shared, want)
+	}
+	own := VerifyArgs("/tmp/v/binary-0", "/tmp/v/plugin.sigstore.json", testRepo, "v0.1.11", "release.yml")
+	if want := common("https://github.com/Silo-Community/silo-plugins-requests-arr/.github/workflows/release.yml@refs/tags/v0.1.11"); !slices.Equal(own, want) {
+		t.Fatalf("VerifyArgs(own workflow) =\n%q\nwant\n%q", own, want)
 	}
 }
 
-func TestCertIdentityRegex(t *testing.T) {
-	pattern := regexp.MustCompile(CertIdentityRegex(testRepo, "v0.1.11"))
+// TestSignerIdentity checks which certificate SANs each signer policy
+// accepts. gh compares --cert-identity to the SAN exactly, so a SAN is
+// accepted only when it equals SignerIdentity.
+func TestSignerIdentity(t *testing.T) {
 	const own = "https://github.com/" + testRepo + "/.github/workflows/"
 	tests := []struct {
-		name string
-		san  string
-		want bool
+		name           string
+		signerWorkflow string
+		san            string
+		want           bool
 	}{
-		{"shared Silo workflow at main", SharedSignerIdentity, true},
-		{"own release workflow at the tag", own + "release.yml@refs/tags/v0.1.11", true},
-		{"own workflow with yaml extension", own + "publish.yaml@refs/tags/v0.1.11", true},
-		{"shared workflow at a tag", "https://github.com/Silo-Server/.github/.github/workflows/plugin-release.yml@refs/tags/v1.0.0", false},
-		{"shared workflow at another branch", "https://github.com/Silo-Server/.github/.github/workflows/plugin-release.yml@refs/heads/dev", false},
-		{"shared workflow in a fork", "https://github.com/someone/.github/.github/workflows/plugin-release.yml@refs/heads/main", false},
-		{"another repository's workflow", "https://github.com/Silo-Community/silo-plugins-requests-seerr/.github/workflows/release.yml@refs/tags/v0.1.11", false},
-		{"repository name as a prefix", "https://github.com/Silo-Community/silo-plugins-requests-arrx/.github/workflows/release.yml@refs/tags/v0.1.11", false},
-		{"another tag", own + "release.yml@refs/tags/v0.1.10", false},
-		{"tag as a prefix", own + "release.yml@refs/tags/v0.1.110", false},
-		{"suffixed tag", own + "release.yml@refs/tags/v0.1.11-rc.1", false},
-		{"branch ref", own + "release.yml@refs/heads/main", false},
-		{"branch named like the tag", own + "release.yml@refs/heads/v0.1.11", false},
-		{"workflow in a subdirectory", own + "nested/release.yml@refs/tags/v0.1.11", false},
-		{"workflow outside .github/workflows", "https://github.com/" + testRepo + "/release.yml@refs/tags/v0.1.11", false},
-		{"unescaped dot in the tag", own + "release.yml@refs/tags/v0x1x11", false},
-		{"unescaped dot in the host", "https://githubxcom/" + testRepo + "/.github/workflows/release.yml@refs/tags/v0.1.11", false},
-		{"trailing text", own + "release.yml@refs/tags/v0.1.11/extra", false},
-		{"leading text", "x" + SharedSignerIdentity, false},
+		{"default: shared workflow at main", "", SharedSignerIdentity, true},
+		{"default: own workflow at the tag", "", own + "release.yml@refs/tags/v0.1.11", false},
+		{"default: shared workflow at a tag", "", "https://github.com/Silo-Server/.github/.github/workflows/plugin-release.yml@refs/tags/v1.0.0", false},
+		{"default: shared workflow in a fork", "", "https://github.com/someone/.github/.github/workflows/plugin-release.yml@refs/heads/main", false},
+		{"declared: that workflow at the tag", "release.yml", own + "release.yml@refs/tags/v0.1.11", true},
+		{"declared: shared workflow", "release.yml", SharedSignerIdentity, false},
+		{"declared: another workflow file", "release.yml", own + "ci.yml@refs/tags/v0.1.11", false},
+		{"declared: branch ref", "release.yml", own + "release.yml@refs/heads/main", false},
+		{"declared: branch named like the tag", "release.yml", own + "release.yml@refs/heads/v0.1.11", false},
+		{"declared: another tag", "release.yml", own + "release.yml@refs/tags/v0.1.10", false},
+		{"declared: another repository", "release.yml", "https://github.com/Silo-Community/silo-plugins-requests-seerr/.github/workflows/release.yml@refs/tags/v0.1.11", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := pattern.MatchString(tt.san); got != tt.want {
-				t.Fatalf("CertIdentityRegex matches %q = %v, want %v", tt.san, got, tt.want)
+			if got := SignerIdentity(testRepo, "v0.1.11", tt.signerWorkflow) == tt.san; got != tt.want {
+				t.Fatalf("SignerIdentity(%q) accepts %q = %v, want %v", tt.signerWorkflow, tt.san, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCheckOnDefaultBranch(t *testing.T) {
+	for status, wantErr := range map[string]bool{"identical": false, "behind": false, "ahead": true, "diverged": true, "": true} {
+		if err := CheckOnDefaultBranch(status, "main", "29fd28771a006d9d68a311865a2b858c5afe301a"); (err != nil) != wantErr {
+			t.Fatalf("CheckOnDefaultBranch(%q) error = %v, wantErr %v", status, err, wantErr)
+		}
+	}
+}
+
+func TestPlatformKeyFromAssetName(t *testing.T) {
+	tests := []struct {
+		name   string
+		want   string
+		wantOK bool
+	}{
+		{"plugin-linux-amd64", "linux/amd64", true},
+		{"plugin-darwin-arm64", "darwin/arm64", true},
+		{"plugin-linux-amd64.zip", "", false},
+		{"plugin-linux.x-amd64", "", false},
+		{"plugin-Linux-amd64", "", false},
+		{"plugin-linux-", "", false},
+		{"plugin--amd64", "", false},
+		{"plugin-linux-amd64-v2", "", false},
+		{"plugin.sigstore.json", "", false},
+	}
+	for _, tt := range tests {
+		got, ok := platformKeyFromAssetName(tt.name)
+		if got != tt.want || ok != tt.wantOK {
+			t.Fatalf("platformKeyFromAssetName(%q) = %q, %v; want %q, %v", tt.name, got, ok, tt.want, tt.wantOK)
+		}
 	}
 }
 
@@ -470,7 +549,8 @@ func TestCheckVerifyOutput(t *testing.T) {
 		{"two attestations, two commits", "[" + result(publicGood, "Tlog", commitA) + "," + result(publicGood, "Tlog", commitB) + "]", "", true},
 		{"no source commit", "[" + result(publicGood, "Tlog", "") + "]", "", true},
 		{"short source commit", "[" + result(publicGood, "Tlog", "29fd287") + "]", "", true},
-		{"GitHub private instance", "[" + result("CN=Fulcio Intermediate l2,O=GitHub\\, Inc.", "TimestampAuthority", commitA) + "]", "", true},
+		// A Tlog timestamp, so the issuer check is what refuses it.
+		{"GitHub private instance", "[" + result("CN=Fulcio Intermediate l2,O=GitHub, Inc.", "Tlog", commitA) + "]", "", true},
 		{"no transparency-log entry", "[" + result(publicGood, "TimestampAuthority", commitA) + "]", "", true},
 		{"no attestations", `[]`, "", true},
 		{"not JSON", `verified`, "", true},

@@ -3,7 +3,6 @@ package catalog
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 )
 
@@ -28,35 +27,49 @@ const (
 	publicGoodCertificateIssuerOrg = "O=sigstore.dev"
 )
 
-// CertIdentityRegex returns the certificate SAN pattern a community release
-// must match. Two signers are accepted, and nothing else: Silo's shared
-// release workflow at main, or a workflow file in the plugin's own repository
-// run from the release tag. The repository and tag are regex-escaped and the
-// pattern is anchored at both ends, so another repository's workflow, another
-// ref, or a branch ref does not match.
-func CertIdentityRegex(repo, tag string) string {
-	ownWorkflow := regexp.QuoteMeta("https://github.com/"+repo) +
-		`/\.github/workflows/[A-Za-z0-9._-]+\.ya?ml@refs/tags/` + regexp.QuoteMeta(tag)
-	return `^(?:` + regexp.QuoteMeta(SharedSignerIdentity) + `|` + ownWorkflow + `)$`
+// SignerIdentity returns the one certificate SAN a release of repo at tag may
+// carry. By default that is Silo's shared release workflow. A plugin whose
+// approval names a signerWorkflow is signed instead by that exact workflow
+// file in its own repository, run from the release tag; no other workflow,
+// ref, or repository matches.
+func SignerIdentity(repo, tag, signerWorkflow string) string {
+	if signerWorkflow == "" {
+		return SharedSignerIdentity
+	}
+	return "https://github.com/" + repo + "/.github/workflows/" + signerWorkflow + "@refs/tags/" + tag
 }
 
 // VerifyArgs returns the `gh` arguments that verify one release binary against
 // the release's bundle. --repo binds the certificate's source repository to the
-// approved repository whichever workflow signed; the identity regex limits the
-// signer; and the source ref, issuer, GitHub-hosted runner, and SLSA
-// provenance predicate are required for both signers. Flags use the
+// approved repository whichever workflow signed; --cert-identity names the one
+// accepted signer; and the source ref, issuer, GitHub-hosted runner, and SLSA
+// provenance predicate are required for both kinds of signer. Flags use the
 // --flag=value form so no value can be read as another flag.
-func VerifyArgs(binaryPath, bundlePath, repo, tag string) []string {
+func VerifyArgs(binaryPath, bundlePath, repo, tag, signerWorkflow string) []string {
 	return []string{
 		"attestation", "verify", binaryPath,
 		"--bundle=" + bundlePath,
 		"--repo=" + repo,
-		"--cert-identity-regex=" + CertIdentityRegex(repo, tag),
+		"--cert-identity=" + SignerIdentity(repo, tag, signerWorkflow),
 		"--cert-oidc-issuer=" + OIDCIssuer,
 		"--source-ref=refs/tags/" + tag,
 		"--predicate-type=" + slsaProvenancePredicate,
 		"--deny-self-hosted-runners",
 		"--format=json",
+	}
+}
+
+// CheckOnDefaultBranch checks the status GitHub's compare API reports for
+// <default branch>...<signed commit>. A plugin signed by its own workflow must
+// release a commit already on its default branch, so a tag on an unmerged
+// branch cannot be signed: "identical" and "behind" pass, "ahead" and
+// "diverged" do not.
+func CheckOnDefaultBranch(status, defaultBranch, commit string) error {
+	switch status {
+	case "identical", "behind":
+		return nil
+	default:
+		return fmt.Errorf("signed commit %s is not on the default branch %s (compare status %q)", commit, defaultBranch, status)
 	}
 }
 

@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -27,6 +28,10 @@ type Release struct {
 
 type PlatformBinary struct {
 	URL string `json:"url"`
+	// Checksum is the lowercase hex SHA-256 of the binary the catalog updater
+	// verified, recorded for signed releases only. Silo servers prefer it over
+	// checksums_url, which pins the listed bytes even if release assets change.
+	Checksum string `json:"checksum,omitempty"`
 }
 
 type CatalogPackage struct {
@@ -159,12 +164,16 @@ func packagePluginID(pkg CatalogPackage) string {
 	return pkg.Manifest.GetPluginId()
 }
 
+// platformPartPattern is one of the os or arch parts of a binary asset name,
+// so plugin-linux-amd64 is a binary and plugin-linux-amd64.zip is not.
+var platformPartPattern = regexp.MustCompile(`^[a-z0-9]+$`)
+
 func platformKeyFromAssetName(name string) (string, bool) {
 	parts := strings.Split(name, "-")
-	if len(parts) != 3 {
+	if len(parts) != 3 || parts[0] != "plugin" {
 		return "", false
 	}
-	if parts[0] != "plugin" || parts[1] == "" || parts[2] == "" {
+	if !platformPartPattern.MatchString(parts[1]) || !platformPartPattern.MatchString(parts[2]) {
 		return "", false
 	}
 	return parts[1] + "/" + parts[2], true

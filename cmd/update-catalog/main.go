@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,10 +56,11 @@ func run(ctx context.Context, repo, tag, manifestPath, approvalsPath string, all
 	if err != nil {
 		return fmt.Errorf("load approvals: %w", err)
 	}
-	pluginID, err := registry.ApprovedPluginID(repo)
+	approved, err := registry.ApprovedRepository(repo)
 	if err != nil {
 		return fmt.Errorf("refuse release: %w", err)
 	}
+	pluginID := approved.PluginID
 
 	index, err := loadIndex(manifestPath)
 	if err != nil {
@@ -75,8 +79,11 @@ func run(ctx context.Context, repo, tag, manifestPath, approvalsPath string, all
 
 	token := os.Getenv("GITHUB_TOKEN")
 	client := &http.Client{Timeout: 30 * time.Second}
+	getJSON := func(ctx context.Context, url string, dest any) error {
+		return githubJSON(ctx, client, token, url, dest)
+	}
 
-	release, err := fetchRelease(ctx, client, token, repo, tag)
+	release, err := fetchRelease(ctx, getJSON, repo, tag)
 	if err != nil {
 		return fmt.Errorf("fetch release: %w", err)
 	}
@@ -92,16 +99,22 @@ func run(ctx context.Context, repo, tag, manifestPath, approvalsPath string, all
 	}
 
 	var commit string
+	var checksums map[string]string
 	if assets.BundleURL != "" {
 		// Binaries are tens of megabytes, so downloads get more time than the
 		// API calls.
 		downloadClient := &http.Client{Timeout: 5 * time.Minute}
-		commit, err = verifyRelease(ctx, downloadClient, repo, tag, assets)
+		commit, checksums, err = verifyRelease(ctx, downloadClient, repo, tag, approved.SignerWorkflow, assets)
 		if err != nil {
 			return fmt.Errorf("refuse release: verify signature: %w", err)
 		}
+		if approved.SignerWorkflow != "" {
+			if err := checkOnDefaultBranch(ctx, getJSON, repo, commit); err != nil {
+				return fmt.Errorf("refuse release: %w", err)
+			}
+		}
 	} else {
-		commit, err = resolveTagCommit(ctx, client, token, repo, tag)
+		commit, err = resolveTagCommit(ctx, getJSON, repo, tag)
 		if err != nil {
 			return fmt.Errorf("resolve tag %s: %w", tag, err)
 		}
@@ -111,8 +124,8 @@ func run(ctx context.Context, repo, tag, manifestPath, approvalsPath string, all
 	if err != nil {
 		return fmt.Errorf("fetch source manifest: %w", err)
 	}
-	if got := sourceManifest.GetPluginId(); got != pluginID {
-		return fmt.Errorf("refuse release: manifest.json names plugin %q, but %s is approved for %q", got, repo, pluginID)
+	if err := approved.CheckManifestPluginID(sourceManifest.GetPluginId()); err != nil {
+		return fmt.Errorf("refuse release: %w", err)
 	}
 	approval, err := registry.Resolve(repo, pluginID)
 	if err != nil {
@@ -123,6 +136,13 @@ func run(ctx context.Context, repo, tag, manifestPath, approvalsPath string, all
 		return fmt.Errorf("build catalog package: %w", err)
 	}
 	pkg.Approval = &approval
+	// Pin each signed binary to the bytes gh verified. verifyRelease checked
+	// every binary in assets, which are the ones the entry lists.
+	for platform, checksum := range checksums {
+		binary := pkg.Binaries[platform]
+		binary.Checksum = checksum
+		pkg.Binaries[platform] = binary
+	}
 
 	index = catalog.UpsertPackage(index, pkg)
 	index = catalog.PruneUnapproved(index, registry)
@@ -134,20 +154,21 @@ func run(ctx context.Context, repo, tag, manifestPath, approvalsPath string, all
 
 // verifyRelease downloads the bundle and every catalogued binary, checks each
 // binary against the bundle with gh, and returns the one commit all of them
-// were built from. Any failure refuses the release.
-func verifyRelease(ctx context.Context, client *http.Client, repo, tag string, assets catalog.ReleaseAssets) (string, error) {
+// were built from and each binary's SHA-256 keyed by platform. Any failure
+// refuses the release.
+func verifyRelease(ctx context.Context, client *http.Client, repo, tag, signerWorkflow string, assets catalog.ReleaseAssets) (string, map[string]string, error) {
 	if len(assets.Binaries) == 0 {
-		return "", fmt.Errorf("release has no plugin binaries")
+		return "", nil, fmt.Errorf("release has no plugin binaries")
 	}
 	dir, err := os.MkdirTemp("", "silo-plugin-verify-")
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer os.RemoveAll(dir)
 
 	bundlePath := filepath.Join(dir, catalog.BundleAssetName)
-	if err := download(ctx, client, assets.BundleURL, bundlePath, maxBundleBytes); err != nil {
-		return "", fmt.Errorf("download %s: %w", catalog.BundleAssetName, err)
+	if _, err := download(ctx, client, assets.BundleURL, bundlePath, maxBundleBytes); err != nil {
+		return "", nil, fmt.Errorf("download %s: %w", catalog.BundleAssetName, err)
 	}
 
 	platforms := make([]string, 0, len(assets.Binaries))
@@ -156,38 +177,70 @@ func verifyRelease(ctx context.Context, client *http.Client, repo, tag string, a
 	}
 	slices.Sort(platforms)
 	var commit string
+	checksums := make(map[string]string, len(platforms))
 	for i, platform := range platforms {
 		binaryPath := filepath.Join(dir, fmt.Sprintf("binary-%d", i))
-		if err := download(ctx, client, assets.Binaries[platform], binaryPath, maxBinaryBytes); err != nil {
-			return "", fmt.Errorf("download %s binary: %w", platform, err)
+		checksum, err := download(ctx, client, assets.Binaries[platform], binaryPath, maxBinaryBytes)
+		if err != nil {
+			return "", nil, fmt.Errorf("download %s binary: %w", platform, err)
 		}
-		cmd := exec.CommandContext(ctx, "gh", catalog.VerifyArgs(binaryPath, bundlePath, repo, tag)...)
+		cmd := exec.CommandContext(ctx, "gh", catalog.VerifyArgs(binaryPath, bundlePath, repo, tag, signerWorkflow)...)
 		cmd.Stderr = os.Stderr
 		out, err := cmd.Output()
 		if err != nil {
-			return "", fmt.Errorf("%s binary: gh attestation verify: %w", platform, err)
+			return "", nil, fmt.Errorf("%s binary: gh attestation verify: %w", platform, err)
 		}
 		binaryCommit, err := catalog.CheckVerifyOutput(out)
 		if err != nil {
-			return "", fmt.Errorf("%s binary: %w", platform, err)
+			return "", nil, fmt.Errorf("%s binary: %w", platform, err)
 		}
 		if commit != "" && binaryCommit != commit {
-			return "", fmt.Errorf("%s binary was built from %s, other binaries from %s", platform, binaryCommit, commit)
+			return "", nil, fmt.Errorf("%s binary was built from %s, other binaries from %s", platform, binaryCommit, commit)
 		}
 		commit = binaryCommit
-		fmt.Fprintf(os.Stderr, "Verified the %s binary of %s %s, built from %s.\n", platform, repo, tag, commit)
+		checksums[platform] = checksum
+		fmt.Fprintf(os.Stderr, "Verified the %s binary of %s %s, built from %s, SHA-256 %s.\n", platform, repo, tag, commit, checksum)
 	}
-	return commit, nil
+	return commit, checksums, nil
+}
+
+// getJSONFunc fetches a GitHub API URL and decodes the JSON response into
+// dest. Tests replace it with a stub.
+type getJSONFunc func(ctx context.Context, url string, dest any) error
+
+// checkOnDefaultBranch refuses a commit that is not on repo's default branch.
+// The default branch is looked up, not assumed.
+func checkOnDefaultBranch(ctx context.Context, getJSON getJSONFunc, repo, commit string) error {
+	var repository struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	if err := getJSON(ctx, "https://api.github.com/repos/"+repo, &repository); err != nil {
+		return fmt.Errorf("look up default branch: %w", err)
+	}
+	if repository.DefaultBranch == "" {
+		return fmt.Errorf("repository %s reports no default branch", repo)
+	}
+	if err := catalog.ValidateCommit(commit); err != nil {
+		return err
+	}
+	var comparison struct {
+		Status string `json:"status"`
+	}
+	compareURL := "https://api.github.com/repos/" + repo + "/compare/" + url.PathEscape(repository.DefaultBranch) + "..." + commit
+	if err := getJSON(ctx, compareURL, &comparison); err != nil {
+		return fmt.Errorf("compare %s with %s: %w", commit, repository.DefaultBranch, err)
+	}
+	return catalog.CheckOnDefaultBranch(comparison.Status, repository.DefaultBranch, commit)
 }
 
 // resolveTagCommit returns the commit a tag points at, following annotated
 // tags. An unsigned release has no certificate naming its commit, so this
 // pins manifest.json to one commit rather than a ref a branch could shadow.
-func resolveTagCommit(ctx context.Context, client *http.Client, token, repo, tag string) (string, error) {
+func resolveTagCommit(ctx context.Context, getJSON getJSONFunc, repo, tag string) (string, error) {
 	var ref struct {
 		Object gitObject `json:"object"`
 	}
-	if err := githubJSON(ctx, client, token, "https://api.github.com/repos/"+repo+"/git/ref/tags/"+tag, &ref); err != nil {
+	if err := getJSON(ctx, "https://api.github.com/repos/"+repo+"/git/ref/tags/"+tag, &ref); err != nil {
 		return "", err
 	}
 	object := ref.Object
@@ -202,7 +255,7 @@ func resolveTagCommit(ctx context.Context, client *http.Client, token, repo, tag
 			var annotated struct {
 				Object gitObject `json:"object"`
 			}
-			if err := githubJSON(ctx, client, token, "https://api.github.com/repos/"+repo+"/git/tags/"+object.SHA, &annotated); err != nil {
+			if err := getJSON(ctx, "https://api.github.com/repos/"+repo+"/git/tags/"+object.SHA, &annotated); err != nil {
 				return "", err
 			}
 			object = annotated.Object
@@ -230,40 +283,43 @@ func loadApprovals(path string) (catalog.ApprovalRegistry, error) {
 	return registry, nil
 }
 
-func download(ctx context.Context, client *http.Client, url, path string, limit int64) error {
+// download saves url to path, refusing a body larger than limit, and returns
+// the lowercase hex SHA-256 of the bytes written.
+func download(ctx context.Context, client *http.Client, url, path string, limit int64) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+		return "", fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("User-Agent", "silo-plugins-catalog-updater")
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("GET %s: %w", url, err)
+		return "", fmt.Errorf("GET %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
+		return "", fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
 	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return err
+		return "", err
 	}
-	written, err := io.Copy(file, io.LimitReader(resp.Body, limit+1))
+	hash := sha256.New()
+	written, err := io.Copy(io.MultiWriter(file, hash), io.LimitReader(resp.Body, limit+1))
 	if closeErr := file.Close(); err == nil {
 		err = closeErr
 	}
 	if err != nil {
-		return fmt.Errorf("read %s: %w", url, err)
+		return "", fmt.Errorf("read %s: %w", url, err)
 	}
 	if written > limit {
-		return fmt.Errorf("GET %s: larger than %d bytes", url, limit)
+		return "", fmt.Errorf("GET %s: larger than %d bytes", url, limit)
 	}
-	return nil
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-func fetchRelease(ctx context.Context, client *http.Client, token, repo, tag string) (catalog.Release, error) {
+func fetchRelease(ctx context.Context, getJSON getJSONFunc, repo, tag string) (catalog.Release, error) {
 	var release catalog.Release
-	if err := githubJSON(ctx, client, token, "https://api.github.com/repos/"+repo+"/releases/tags/"+tag, &release); err != nil {
+	if err := getJSON(ctx, "https://api.github.com/repos/"+repo+"/releases/tags/"+tag, &release); err != nil {
 		return catalog.Release{}, err
 	}
 	return release, nil
