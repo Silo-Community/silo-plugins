@@ -747,7 +747,7 @@
     {
       "manifest": {
         "plugin_id": "silo.watchprovider.scrob",
-        "version": "0.3.1",
+        "version": "0.3.2",
         "silo_api_version": "v1",
         "supported_platforms": [
           {
@@ -844,16 +844,20 @@
         }
       },
       "repo_url": "https://github.com/Silo-Community/silo-plugin-watchprovider-scrob",
-      "checksums_url": "https://github.com/Silo-Community/silo-plugin-watchprovider-scrob/releases/download/v0.3.1/checksums.txt",
+      "checksums_url": "https://github.com/Silo-Community/silo-plugin-watchprovider-scrob/releases/download/v0.3.2/checksums.txt",
+      "bundle_url": "https://github.com/Silo-Community/silo-plugin-watchprovider-scrob/releases/download/v0.3.2/plugin.sigstore.json",
       "binaries": {
         "darwin/arm64": {
-          "url": "https://github.com/Silo-Community/silo-plugin-watchprovider-scrob/releases/download/v0.3.1/plugin-darwin-arm64"
+          "url": "https://github.com/Silo-Community/silo-plugin-watchprovider-scrob/releases/download/v0.3.2/plugin-darwin-arm64",
+          "checksum": "d7a11792849a41f0a86d3c40d9d67fba2aeabdabc21c36205ceaa55568006aa4"
         },
         "linux/amd64": {
-          "url": "https://github.com/Silo-Community/silo-plugin-watchprovider-scrob/releases/download/v0.3.1/plugin-linux-amd64"
+          "url": "https://github.com/Silo-Community/silo-plugin-watchprovider-scrob/releases/download/v0.3.2/plugin-linux-amd64",
+          "checksum": "88392acad20748bc7645322b3b18f548c71883c06f87907746f1e49947cade32"
         },
         "linux/arm64": {
-          "url": "https://github.com/Silo-Community/silo-plugin-watchprovider-scrob/releases/download/v0.3.1/plugin-linux-arm64"
+          "url": "https://github.com/Silo-Community/silo-plugin-watchprovider-scrob/releases/download/v0.3.2/plugin-linux-arm64",
+          "checksum": "c037e9582a44e474ae545116eb432d55143d70e38632fc86feeea7cc2e92f3bd"
         }
       },
       "approval": {
