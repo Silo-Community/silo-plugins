@@ -166,7 +166,7 @@
     {
       "manifest": {
         "plugin_id": "silo.requests.arr",
-        "version": "0.1.11",
+        "version": "0.1.12",
         "silo_api_version": "v1",
         "supported_platforms": [
           {
@@ -494,16 +494,20 @@
         }
       },
       "repo_url": "https://github.com/Silo-Community/silo-plugins-requests-arr",
-      "checksums_url": "https://github.com/Silo-Community/silo-plugins-requests-arr/releases/download/v0.1.11/checksums.txt",
+      "checksums_url": "https://github.com/Silo-Community/silo-plugins-requests-arr/releases/download/v0.1.12/checksums.txt",
+      "bundle_url": "https://github.com/Silo-Community/silo-plugins-requests-arr/releases/download/v0.1.12/plugin.sigstore.json",
       "binaries": {
         "darwin/arm64": {
-          "url": "https://github.com/Silo-Community/silo-plugins-requests-arr/releases/download/v0.1.11/plugin-darwin-arm64"
+          "url": "https://github.com/Silo-Community/silo-plugins-requests-arr/releases/download/v0.1.12/plugin-darwin-arm64",
+          "checksum": "28a97b877847e7fd023729238e3eba3c5ccd6b77c0b9ba0c13b34da527dec4c1"
         },
         "linux/amd64": {
-          "url": "https://github.com/Silo-Community/silo-plugins-requests-arr/releases/download/v0.1.11/plugin-linux-amd64"
+          "url": "https://github.com/Silo-Community/silo-plugins-requests-arr/releases/download/v0.1.12/plugin-linux-amd64",
+          "checksum": "fad7988ff0f7d2cac1fecefccdcc56283b1330d13fbf7cf2684c8570296ce436"
         },
         "linux/arm64": {
-          "url": "https://github.com/Silo-Community/silo-plugins-requests-arr/releases/download/v0.1.11/plugin-linux-arm64"
+          "url": "https://github.com/Silo-Community/silo-plugins-requests-arr/releases/download/v0.1.12/plugin-linux-arm64",
+          "checksum": "68ecba26193f675bd812f521c0735ab48126bf203181d67572381b3824067843"
         }
       },
       "approval": {
