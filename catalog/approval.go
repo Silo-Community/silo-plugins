@@ -71,6 +71,19 @@ func (r ApprovalRegistry) Resolve(repository, pluginID string) (Approval, error)
 	return Approval{}, fmt.Errorf("plugin %s from %s is not approved", pluginID, repository)
 }
 
+// ApprovedPluginID returns the plugin ID the registry binds to repo, or an
+// error when repo is not approved. update-catalog calls it before any fetch.
+// The comparison is exact, so every request and asset URL built from repo uses
+// the spelling the registry records.
+func (r ApprovalRegistry) ApprovedPluginID(repo string) (string, error) {
+	for _, approved := range r.Plugins {
+		if approved.Repository == repo {
+			return approved.PluginID, nil
+		}
+	}
+	return "", fmt.Errorf("repository %s is not in the approval registry", repo)
+}
+
 func ValidateApprovedIndex(index RepositoryIndex, registry ApprovalRegistry) error {
 	seenPluginIDs := make(map[string]struct{}, len(index.Plugins))
 	for _, pkg := range index.Plugins {
